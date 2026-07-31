@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin — Todorov Tees Blog</title>
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body class="admin-body">
+
+<div class="admin-topbar">
+  <div class="wrap">
+    <strong class="mono">TODOROV TEES — ADMIN</strong>
+    <button id="logout-btn" style="display:none;">Излез / смени токена</button>
+  </div>
+</div>
+
+<div class="admin-shell">
+
+  <!-- ЕКРАН 1: настройка на връзката с GitHub -->
+  <div id="setup-screen" class="admin-card">
+    <h1 style="font-size:20px;margin-bottom:8px;text-transform:none;letter-spacing:0;font-family:var(--font-body);font-weight:800;">Свързване с GitHub</h1>
+    <p style="color:var(--graphite);font-size:14px;margin-bottom:22px;">
+      Тези данни се пазят само в твоя браузър (сесийно), не се качват никъде другаде.
+    </p>
+    <div id="setup-error"></div>
+    <div class="field">
+      <label>GitHub потребител / организация</label>
+      <input type="text" id="cfg-owner" placeholder="напр. todorovtees">
+    </div>
+    <div class="field">
+      <label>Име на repo-то</label>
+      <input type="text" id="cfg-repo" placeholder="напр. blog">
+    </div>
+    <div class="field">
+      <label>Branch</label>
+      <input type="text" id="cfg-branch" value="main">
+    </div>
+    <div class="field">
+      <label>Personal Access Token</label>
+      <input type="password" id="cfg-token" placeholder="ghp_...">
+      <small>Settings → Developer settings → Fine-grained tokens → достъп само до това repo, права Contents: Read & Write.</small>
+    </div>
+    <button class="btn" id="connect-btn">Свържи се</button>
+  </div>
+
+  <!-- ЕКРАН 2: dashboard със статии -->
+  <div id="dashboard-screen" style="display:none;">
+    <div class="actions-row" style="margin-bottom:20px;">
+      <button class="btn" id="new-post-btn">+ Нова статия</button>
+      <a class="btn secondary" href="index.html" target="_blank">Виж блога</a>
+    </div>
+    <div id="dash-alert"></div>
+    <div class="admin-card">
+      <table class="admin-table" id="posts-table">
+        <thead>
+          <tr><th>Заглавие</th><th>Дата</th><th>Статус</th><th></th></tr>
+        </thead>
+        <tbody id="posts-tbody"></tbody>
+      </table>
+      <p id="no-posts" style="display:none;" class="spinner-text">Все още няма статии. Натисни "+ Нова статия".</p>
+    </div>
+  </div>
+
+  <!-- ЕКРАН 3: форма за нова / редакция на статия -->
+  <div id="editor-screen" class="admin-card" style="display:none;">
+    <h1 id="editor-title" style="font-size:20px;margin-bottom:22px;text-transform:none;letter-spacing:0;font-family:var(--font-body);font-weight:800;">Нова статия</h1>
+    <div id="editor-error"></div>
+    <div class="field">
+      <label>Заглавие</label>
+      <input type="text" id="f-title">
+    </div>
+    <div class="field">
+      <label>Кратко описание (показва се в списъка)</label>
+      <input type="text" id="f-excerpt" maxlength="300">
+    </div>
+    <div class="field">
+      <label>Категория (по избор)</label>
+      <input type="text" id="f-category" placeholder="напр. Новини, Зад кулисите, Дроп">
+    </div>
+    <div class="field">
+      <label>Корична снимка</label>
+      <input type="file" id="f-image" accept="image/*">
+      <div id="f-image-preview" style="margin-top:10px;"></div>
+    </div>
+    <div class="field">
+      <label>Съдържание (HTML се поддържа — &lt;p&gt;, &lt;b&gt;, &lt;img&gt; и т.н.)</label>
+      <textarea id="f-content"></textarea>
+    </div>
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-family:var(--font-body);font-weight:500;font-size:14px;"><input type="checkbox" id="f-published" checked style="width:auto;"> Публикувай</label>
+    </div>
+    <div class="actions-row">
+      <button class="btn" id="save-post-btn">Запази статията</button>
+      <button class="btn secondary" id="cancel-edit-btn">Отказ</button>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ==================== Конфигурация / сесия ==================== */
+const SESSION_KEY = 'ttees_admin_cfg';
+let cfg = null;
+let currentSha = null;
+let posts = [];
+let editingId = null;
+
+const setupScreen = document.getElementById('setup-screen');
+const dashboardScreen = document.getElementById('dashboard-screen');
+const editorScreen = document.getElementById('editor-screen');
+const logoutBtn = document.getElementById('logout-btn');
+
+function loadCfg() {
+  const raw = sessionStorage.getItem(SESSION_KEY);
+  return raw ? JSON.parse(raw) : null;
+}
+function saveCfg(c) { sessionStorage.setItem(SESSION_KEY, JSON.stringify(c)); }
+function clearCfg() { sessionStorage.removeItem(SESSION_KEY); location.reload(); }
+logoutBtn.addEventListener('click', clearCfg);
+
+/* ==================== GitHub API помощни функции ==================== */
+function apiUrl() { return `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/posts.json`; }
+function ghHeaders() { return { 'Authorization': `Bearer ${cfg.token}`, 'Accept': 'application/vnd.github+json' }; }
+function b64EncodeUnicode(str) {
+  return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1)));
+}
+function b64DecodeUnicode(str) {
+  const clean = str.replace(/\s/g, '');
+  return decodeURIComponent(atob(clean).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
+}
+
+async function fetchPosts() {
+  const res = await fetch(`${apiUrl()}?ref=${encodeURIComponent(cfg.branch)}&t=${Date.now()}`, { headers: ghHeaders() });
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) throw new Error('Невалиден токен или няма достъп до repo-то.');
+    if (res.status === 404) throw new Error('posts.json не е намерен в repo-то/branch-а.');
+    throw new Error('Грешка от GitHub (' + res.status + ').');
+  }
+  const data = await res.json();
+  currentSha = data.sha;
+  return JSON.parse(b64DecodeUnicode(data.content));
+}
+
+async function savePosts(updatedPosts, commitMessage) {
+  const body = {
+    message: commitMessage,
+    content: b64EncodeUnicode(JSON.stringify(updatedPosts, null, 2)),
+    sha: currentSha,
+    branch: cfg.branch
+  };
+  const res = await fetch(apiUrl(), {
+    method: 'PUT',
+    headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || 'Грешка при запис в GitHub.');
+  }
+  const data = await res.json();
+  currentSha = data.content.sha;
+}
+
+async function uploadImage(file) {
+  const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
+  const path = `assets/uploads/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const base64 = await fileToBase64(file);
+  const res = await fetch(`https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${path}`, {
+    method: 'PUT',
+    headers: { ...ghHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: `Качена снимка: ${path}`, content: base64, branch: cfg.branch })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.message || 'Грешка при качване на снимката.');
+  }
+  return path;
+}
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ==================== Помощни: slug, дати ==================== */
+function slugify(text) {
+  const map = {'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ж':'zh','з':'z','и':'i','й':'y','к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f','х':'h','ц':'ts','ч':'ch','ш':'sh','щ':'sht','ъ':'a','ь':'y','ю':'yu','я':'ya'};
+  let out = text.toLowerCase().trim();
+  out = out.split('').map(ch => map[ch] !== undefined ? map[ch] : ch).join('');
+  out = out.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return out || 'statiya';
+}
+function uniqueSlug(base, ignoreId) {
+  let slug = base, i = 2;
+  while (posts.some(p => p.slug === slug && p.id !== ignoreId)) { slug = `${base}-${i}`; i++; }
+  return slug;
+}
+function todayIso() { return new Date().toISOString().slice(0, 10); }
+function formatDate(d) { return new Date(d).toLocaleDateString('bg-BG', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
+
+/* ==================== Setup / login ==================== */
+document.getElementById('connect-btn').addEventListener('click', async () => {
+  const owner = document.getElementById('cfg-owner').value.trim();
+  const repo = document.getElementById('cfg-repo').value.trim();
+  const branch = document.getElementById('cfg-branch').value.trim() || 'main';
+  const token = document.getElementById('cfg-token').value.trim();
+  const errBox = document.getElementById('setup-error');
+  errBox.innerHTML = '';
+
+  if (!owner || !repo || !token) { errBox.innerHTML = '<div class="alert error">Попълни всички полета.</div>'; return; }
+  cfg = { owner, repo, branch, token };
+  try {
+    posts = await fetchPosts();
+    saveCfg(cfg);
+    showDashboard();
+  } catch (e) {
+    errBox.innerHTML = `<div class="alert error">${e.message}</div>`;
+    cfg = null;
+  }
+});
+
+/* ==================== Dashboard ==================== */
+function showDashboard() {
+  setupScreen.style.display = 'none';
+  editorScreen.style.display = 'none';
+  dashboardScreen.style.display = 'block';
+  logoutBtn.style.display = 'inline-block';
+  renderTable();
+}
+
+function renderTable() {
+  const tbody = document.getElementById('posts-tbody');
+  const noPosts = document.getElementById('no-posts');
+  const sorted = [...posts].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  if (sorted.length === 0) {
+    document.getElementById('posts-table').style.display = 'none';
+    noPosts.style.display = 'block';
+    return;
+  }
+  document.getElementById('posts-table').style.display = 'table';
+  noPosts.style.display = 'none';
+
+  tbody.innerHTML = sorted.map(p => `
+    <tr>
+      <td>${escapeHtml(p.title)}</td>
+      <td class="mono">${formatDate(p.date)}</td>
+      <td><button class="status-pill ${p.published ? 'on' : 'off'}" data-toggle="${p.id}">${p.published ? 'Публикувана' : 'Скрита'}</button></td>
+      <td style="white-space:nowrap;">
+        <a href="#" data-edit="${p.id}">Редакция</a> &nbsp;·&nbsp;
+        <a href="#" data-delete="${p.id}" style="color:var(--stamp);">Изтрий</a>
+      </td>
+    </tr>
+  `).join('');
+
+  tbody.querySelectorAll('[data-toggle]').forEach(btn => btn.addEventListener('click', () => togglePublished(btn.dataset.toggle)));
+  tbody.querySelectorAll('[data-edit]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); openEditor(a.dataset.edit); }));
+  tbody.querySelectorAll('[data-delete]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); deletePost(a.dataset.delete); }));
+}
+
+function dashAlert(msg, type) {
+  document.getElementById('dash-alert').innerHTML = `<div class="alert ${type}">${msg}</div>`;
+  setTimeout(() => document.getElementById('dash-alert').innerHTML = '', 4000);
+}
+
+async function togglePublished(id) {
+  const p = posts.find(p => p.id === id);
+  p.published = !p.published;
+  try { await savePosts(posts, `Статус промяна: ${p.title}`); renderTable(); }
+  catch (e) { p.published = !p.published; dashAlert(e.message, 'error'); }
+}
+
+async function deletePost(id) {
+  if (!confirm('Изтриване на статията? Това е необратимо.')) return;
+  const before = posts;
+  posts = posts.filter(p => p.id !== id);
+  try { await savePosts(posts, `Изтрита статия: ${id}`); renderTable(); dashAlert('Статията е изтрита.', 'success'); }
+  catch (e) { posts = before; dashAlert(e.message, 'error'); }
+}
+
+/* ==================== Editor ==================== */
+document.getElementById('new-post-btn').addEventListener('click', () => openEditor(null));
+document.getElementById('cancel-edit-btn').addEventListener('click', () => {
+  editorScreen.style.display = 'none';
+  dashboardScreen.style.display = 'block';
+});
+
+function openEditor(id) {
+  editingId = id;
+  document.getElementById('editor-error').innerHTML = '';
+  document.getElementById('f-image').value = '';
+  document.getElementById('f-image-preview').innerHTML = '';
+
+  if (id) {
+    const p = posts.find(p => p.id === id);
+    document.getElementById('editor-title').textContent = 'Редакция на статия';
+    document.getElementById('f-title').value = p.title;
+    document.getElementById('f-excerpt').value = p.excerpt || '';
+    document.getElementById('f-category').value = p.category || '';
+    document.getElementById('f-content').value = p.content;
+    document.getElementById('f-published').checked = !!p.published;
+    if (p.cover_image) {
+      document.getElementById('f-image-preview').innerHTML = `<img src="${p.cover_image}" style="max-width:200px;border-radius:4px;">`;
+    }
+  } else {
+    document.getElementById('editor-title').textContent = 'Нова статия';
+    document.getElementById('f-title').value = '';
+    document.getElementById('f-excerpt').value = '';
+    document.getElementById('f-category').value = '';
+    document.getElementById('f-content').value = '';
+    document.getElementById('f-published').checked = true;
+  }
+
+  dashboardScreen.style.display = 'none';
+  editorScreen.style.display = 'block';
+}
+
+document.getElementById('save-post-btn').addEventListener('click', async () => {
+  const title = document.getElementById('f-title').value.trim();
+  const excerpt = document.getElementById('f-excerpt').value.trim();
+  const category = document.getElementById('f-category').value.trim();
+  const content = document.getElementById('f-content').value;
+  const published = document.getElementById('f-published').checked;
+  const imageFile = document.getElementById('f-image').files[0];
+  const errBox = document.getElementById('editor-error');
+  errBox.innerHTML = '';
+
+  if (!title || !content) { errBox.innerHTML = '<div class="alert error">Заглавието и съдържанието са задължителни.</div>'; return; }
+
+  const saveBtn = document.getElementById('save-post-btn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Записване…';
+
+  try {
+    let coverImage = editingId ? (posts.find(p => p.id === editingId).cover_image || '') : '';
+    if (imageFile) coverImage = await uploadImage(imageFile);
+
+    if (editingId) {
+      const p = posts.find(p => p.id === editingId);
+      Object.assign(p, { title, excerpt, category, content, published, cover_image: coverImage });
+      await savePosts(posts, `Редактирана статия: ${title}`);
+    } else {
+      posts.push({
+        id: Date.now().toString(),
+        slug: uniqueSlug(slugify(title), null),
+        title, excerpt, category, content,
+        cover_image: coverImage,
+        published,
+        date: todayIso()
+      });
+      await savePosts(posts, `Нова статия: ${title}`);
+    }
+
+    editorScreen.style.display = 'none';
+    dashboardScreen.style.display = 'block';
+    renderTable();
+    dashAlert('Записано успешно.', 'success');
+  } catch (e) {
+    errBox.innerHTML = `<div class="alert error">${e.message}</div>`;
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Запази статията';
+  }
+});
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/* ==================== Инициализация ==================== */
+(async function init() {
+  const saved = loadCfg();
+  if (saved) {
+    cfg = saved;
+    try { posts = await fetchPosts(); showDashboard(); }
+    catch (e) { clearCfg(); }
+  }
+})();
+</script>
+
+</body>
+</html>

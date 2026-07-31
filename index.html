@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Todorov Tees Blog</title>
+<meta name="description" content="Новини, дропове и истории от Todorov Tees.">
+<link rel="icon" href="assets/img/logo.png">
+<link rel="stylesheet" href="assets/css/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <img src="assets/img/logo.png" alt="Todorov Tees">
+    </a>
+    <nav class="site-nav">
+      <a href="https://todorovtees.com/">Магазин</a>
+      <a href="index.html"><span class="tag-dot"></span>Блог</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="grain"></div>
+  <img class="t-ghost" src="assets/img/t-mark.png" alt="">
+  <div class="wrap">
+    <div class="stamp-frame"><span class="dot"></span><span>Todorov Tees · Editorial</span></div>
+    <h1>НЕ ЧЕТИ ПРОСТО БЛОГ.<br>ЧЕТИ НАЧИН НА МИСЛЕНЕ.</h1>
+    <p class="lead">Новини за нови дропове, зад кулисите на дизайните и всичко, което движи марката.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-title-row">
+      <h2 class="section-title">Последни статии</h2>
+      <span class="section-count mono" id="post-count"></span>
+    </div>
+    <div id="posts-container">
+      <p class="spinner-text">Зареждане на статиите…</p>
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <span class="footer-mark">© <span id="year"></span> Todorov Tees</span>
+    <span><a href="https://todorovtees.com/">todorovtees.com</a> &middot; <a href="https://www.instagram.com/todorov.tees/">Instagram</a></span>
+  </div>
+</footer>
+
+<script>
+document.getElementById('year').textContent = new Date().getFullYear();
+
+fetch('posts.json?t=' + Date.now())
+  .then(r => r.json())
+  .then(posts => {
+    const container = document.getElementById('posts-container');
+    const published = posts
+      .filter(p => p.published)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    document.getElementById('post-count').textContent =
+      published.length ? `${String(published.length).padStart(2,'0')} статии` : '';
+
+    if (published.length === 0) {
+      container.innerHTML = '<div class="empty-state">Все още няма публикувани статии. Първият дроп предстои.</div>';
+      return;
+    }
+
+    container.innerHTML = '<div class="post-grid">' + published.map((p, i) => `
+      <a class="tag-card" href="post.html?slug=${encodeURIComponent(p.slug)}">
+        <span class="grommet"></span>
+        <div class="thumb" style="background-image:url('${p.cover_image || ''}')"></div>
+        <div class="tag-meta">
+          <span class="drop-no">DROP N° ${String(published.length - i).padStart(3, '0')}</span>
+          <span>${formatDate(p.date)}</span>
+        </div>
+        <h3>${escapeHtml(p.title)}</h3>
+        <p>${escapeHtml(p.excerpt || '')}</p>
+        <span class="read-more">Прочети</span>
+      </a>
+    `).join('') + '</div>';
+  })
+  .catch(() => {
+    document.getElementById('posts-container').innerHTML =
+      '<div class="empty-state">Грешка при зареждане на статиите. Презареди страницата.</div>';
+  });
+
+function formatDate(d) {
+  return new Date(d).toLocaleDateString('bg-BG', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+</script>
+
+</body>
+</html>
